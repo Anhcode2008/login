@@ -1,9 +1,8 @@
 from flask import Flask, request, jsonify
-import asyncio
-import aiohttp
-import ssl
+import requests
 import json
 import random
+import time
 from datetime import datetime
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
@@ -128,6 +127,8 @@ def parse_major_login_response(data: bytes) -> dict:
                     result["region"] = value.decode()
                 elif field_num == 8:
                     result["token"] = value.decode()
+                elif field_num == 10:
+                    result["server_url"] = value.decode()
                 elif field_num == 22:
                     result["key"] = value.hex()
                 elif field_num == 23:
@@ -138,8 +139,8 @@ def parse_major_login_response(data: bytes) -> dict:
         result["iv"] = FIXED_IV.hex()
     return result
 
-# ==================== LOGIN FUNCTION ====================
-async def login_with_token(open_id: str, access_token: str) -> dict:
+# ==================== LOGIN FUNCTION (DÙNG REQUESTS) ====================
+def login_with_token(open_id: str, access_token: str) -> dict:
     encrypted_payload = build_major_login_payload(open_id, access_token)
     headers = {
         "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 11)",
@@ -147,21 +148,16 @@ async def login_with_token(open_id: str, access_token: str) -> dict:
         "Accept-Encoding": "gzip",
         "Connection": "Keep-Alive"
     }
-    ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
-    async with aiohttp.ClientSession() as session:
-        async with session.post(MAJOR_LOGIN_URL, data=encrypted_payload, headers=headers, ssl=ssl_context) as resp:
-            if resp.status != 200:
-                return {"success": False, "error": f"HTTP {resp.status}"}
-            resp_data = await resp.read()
-            try:
-                decrypted = decrypt_aes(resp_data)
-                result = parse_major_login_response(decrypted)
-                result["open_id"] = open_id
-                return result
-            except Exception as e:
-                return {"success": False, "error": f"Parse failed: {str(e)}"}
+    try:
+        response = requests.post(MAJOR_LOGIN_URL, data=encrypted_payload, headers=headers, verify=False, timeout=30)
+        if response.status_code != 200:
+            return {"success": False, "error": f"HTTP {response.status_code}"}
+        decrypted = decrypt_aes(response.content)
+        result = parse_major_login_response(decrypted)
+        result["open_id"] = open_id
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 # ==================== API ENDPOINTS ====================
 @app.route('/login', methods=['GET', 'POST'])
@@ -173,12 +169,15 @@ def login():
         data = request.get_json()
         open_id = data.get('open_id') if data else None
         access_token = data.get('access_token') if data else None
+    
     if not open_id or not access_token:
-        return jsonify({"success": False, "error": "Missing open_id or access_token"}), 400
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    result = loop.run_until_complete(login_with_token(open_id, access_token))
-    loop.close()
+        return jsonify({
+            "success": False, 
+            "error": "Missing open_id or access_token",
+            "usage": "/login?open_id=xxx&access_token=xxx"
+        }), 400
+    
+    result = login_with_token(open_id, access_token)
     return jsonify(result)
 
 @app.route('/', methods=['GET'])
@@ -186,12 +185,17 @@ def index():
     return jsonify({
         "status": "running",
         "service": "FF Login API",
-        "endpoint": "/login?open_id=xxx&access_token=xxx"
+        "endpoint": "/login?open_id=xxx&access_token=xxx",
+        "method": "GET or POST"
     })
 
-# ==================== FOR VERCEL ====================
-app.debug = False
-app.config['PROPAGATE_EXCEPTIONS'] = True
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat()
+    })
 
+# ==================== MAIN ====================
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
