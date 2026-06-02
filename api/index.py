@@ -3,7 +3,6 @@ import asyncio
 import aiohttp
 import ssl
 import json
-import time
 import random
 from datetime import datetime
 from Crypto.Cipher import AES
@@ -13,7 +12,6 @@ app = Flask(__name__)
 
 # ==================== CONSTANTS ====================
 MAJOR_LOGIN_URL = "https://loginbp.ggblueshark.com/MajorLogin"
-
 FIXED_KEY = b'Yg&tc%DEuh6%Zc^8'
 FIXED_IV = b'6oyZDr22E3ychjM%'
 
@@ -47,7 +45,7 @@ def read_varint(data: bytes, pos: int) -> tuple:
             break
     return result, pos
 
-# ==================== BUILD MAJOR LOGIN PROTOBUF ====================
+# ==================== BUILD MAJOR LOGIN PAYLOAD ====================
 def build_major_login_payload(open_id: str, access_token: str) -> bytes:
     login_data = {
         "event_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -130,8 +128,6 @@ def parse_major_login_response(data: bytes) -> dict:
                     result["region"] = value.decode()
                 elif field_num == 8:
                     result["token"] = value.decode()
-                elif field_num == 10:
-                    result["server_url"] = value.decode()
                 elif field_num == 22:
                     result["key"] = value.hex()
                 elif field_num == 23:
@@ -178,7 +174,7 @@ def login():
         open_id = data.get('open_id') if data else None
         access_token = data.get('access_token') if data else None
     if not open_id or not access_token:
-        return jsonify({"success": False, "error": "Thiếu open_id hoặc access_token"}), 400
+        return jsonify({"success": False, "error": "Missing open_id or access_token"}), 400
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     result = loop.run_until_complete(login_with_token(open_id, access_token))
@@ -188,20 +184,14 @@ def login():
 @app.route('/', methods=['GET'])
 def index():
     return jsonify({
-        "name": "FF Login API",
-        "endpoints": {
-            "GET /login?open_id=xxx&access_token=xxx": "Login",
-            "POST /login": '{"open_id": "xxx", "access_token": "xxx"}'
-        }
+        "status": "running",
+        "service": "FF Login API",
+        "endpoint": "/login?open_id=xxx&access_token=xxx"
     })
 
 # ==================== FOR VERCEL ====================
 app.debug = False
+app.config['PROPAGATE_EXCEPTIONS'] = True
 
-# This is required for Vercel serverless
-async def async_handler(*args, **kwargs):
-    return await app(*args, **kwargs)
-
-# ==================== MAIN ====================
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
